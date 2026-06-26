@@ -1,0 +1,183 @@
+[
+    {
+        "id": "in-distancia",
+        "type": "mqtt in",
+        "z": "tab-tof",
+        "name": "Distancia (mm)",
+        "topic": "caece/tof/distancia",
+        "qos": "0",
+        "datatype": "auto",
+        "broker": "broker-publico",
+        "inputs": 0,
+        "x": 590,
+        "y": 360,
+        "wires": [
+            [
+                "debug-distancia",
+                "fn-distancia"
+            ]
+        ]
+    },
+    {
+        "id": "in-evento",
+        "type": "mqtt in",
+        "z": "tab-tof",
+        "name": "Evento (ALERTA/OK)",
+        "topic": "caece/tof/evento",
+        "qos": "0",
+        "datatype": "json",
+        "broker": "broker-publico",
+        "inputs": 0,
+        "x": 600,
+        "y": 480,
+        "wires": [
+            [
+                "debug-evento",
+                "fn-evento"
+            ]
+        ]
+    },
+    {
+        "id": "debug-distancia",
+        "type": "debug",
+        "z": "tab-tof",
+        "name": "Debug distancia",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "x": 860,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "debug-evento",
+        "type": "debug",
+        "z": "tab-tof",
+        "name": "Debug evento",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "x": 860,
+        "y": 440,
+        "wires": []
+    },
+    {
+        "id": "fn-distancia",
+        "type": "function",
+        "z": "tab-tof",
+        "name": "Formatear para gauge",
+        "func": "msg.payload = Number(msg.payload);\nreturn msg;",
+        "outputs": 1,
+        "x": 870,
+        "y": 370,
+        "wires": [
+            [
+                "gauge-distancia"
+            ]
+        ]
+    },
+    {
+        "id": "gauge-distancia",
+        "type": "ui_gauge",
+        "z": "tab-tof",
+        "name": "Distancia actual",
+        "group": "4b9258303165a05a",
+        "order": 1,
+        "width": 0,
+        "height": 0,
+        "gtype": "gage",
+        "title": "Distancia (mm)",
+        "label": "mm",
+        "format": "{{value}}",
+        "min": 0,
+        "max": "1000",
+        "colors": [
+            "#00b500",
+            "#e6e600",
+            "#ca3838"
+        ],
+        "seg1": "200",
+        "seg2": "600",
+        "diff": false,
+        "className": "",
+        "x": 1110,
+        "y": 370,
+        "wires": []
+    },
+    {
+        "id": "fn-evento",
+        "type": "function",
+        "z": "tab-tof",
+        "name": "Detectar ALERTA",
+        "func": "if (msg.payload.evento === \"ALERTA\") {\n    msg.payload = \"⚠️ Objeto detectado a \" + msg.payload.distancia_mm + \" mm (umbral: \" + msg.payload.umbral_mm + \" mm)\";\n    return msg;\n}\nreturn null; // descartamos los eventos OK para la notificación\n",
+        "outputs": 1,
+        "x": 880,
+        "y": 520,
+        "wires": [
+            [
+                "notif-alerta"
+            ]
+        ]
+    },
+    {
+        "id": "notif-alerta",
+        "type": "ui_toast",
+        "z": "tab-tof",
+        "position": "top right",
+        "displayTime": "4",
+        "highlight": "",
+        "sendall": true,
+        "outputs": 0,
+        "ok": "OK",
+        "cancel": "",
+        "raw": false,
+        "topic": "Alerta de proximidad",
+        "name": "Notificación visual",
+        "x": 1130,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "broker-publico",
+        "type": "mqtt-broker",
+        "name": "test.mosquitto.org",
+        "broker": "test.mosquitto.org",
+        "port": "1883",
+        "clientid": "nodered-caece-tof",
+        "autoConnect": true,
+        "usetls": false,
+        "keepalive": "60",
+        "cleansession": true
+    },
+    {
+        "id": "4b9258303165a05a",
+        "type": "ui_group",
+        "name": "Sensores",
+        "tab": "a6c7ac10d65b3a00",
+        "order": 1,
+        "disp": true,
+        "width": 6,
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "a6c7ac10d65b3a00",
+        "type": "ui_tab",
+        "name": "ToF",
+        "icon": "dashboard",
+        "disabled": false,
+        "hidden": false
+    },
+    {
+        "id": "a357eb1ea2f96d39",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-dashboard": "3.6.6"
+        }
+    }
+]

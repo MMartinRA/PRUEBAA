@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  node-red:
+    image: nodered/node-red:latest
+    container_name: node-red-tof
+    ports:
+      - "1880:1880"
+    volumes:
+      - node_red_data:/data
+    restart: unless-stopped
+    environment:
+      - TZ=America/Argentina/Buenos_Aires
+
+  backend:
+    image: node:20-alpine
+    container_name: tof-backend
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+    command: sh -c "npm install && node server.js"
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+    environment:
+      - TZ=America/Argentina/Buenos_Aires
+
+volumes:
+  node_red_data:

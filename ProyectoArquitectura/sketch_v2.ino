@@ -1,23 +1,23 @@
 /*
   ====================================================================
-  Sistema ToF - ESP32 Firmware v2
+  Sistema HC-SR04 - ESP32 Firmware 
   Trabajo Final · ARQUITECTURA AVANZADA / COMPLEJIDAD ALGORÍTMICA
   Universidad CAECE · Mar del Plata
   ====================================================================
-  Hardware SIMULADO: ESP32 + HC-SR04 (sustituto de VL53L0X en Wokwi)
-  Para pasar al VL53L0X real ver sección PORTABILIDAD al final.
+  Hardware SIMULADO: ESP32 + HC-SR04 
   ====================================================================
   Tópicos MQTT:
     PUBLICA  caece/tof/distancia   -> valor numérico en mm
     PUBLICA  caece/tof/evento      -> JSON con tipo ALERTA/OK
     SUSCRIBE caece/tof/config      -> JSON con nueva config
     SUSCRIBE caece/tof/cmd         -> JSON con {activo: bool}
+    SUSCRIBE caece/tof/buzzer      -> "auto" | "manual" | "off" | "SILENCIAR"
   ====================================================================
 */
 
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <ArduinoJson.h>        // librería adicional: ArduinoJson
+#include <ArduinoJson.h>
 
 // ---------------------------------------------------------------
 // Pines
@@ -30,24 +30,25 @@ const int BUZZER_PIN = 4;
 // ---------------------------------------------------------------
 // Parámetros configurables (se actualizan vía MQTT)
 // ---------------------------------------------------------------
-int   umbralMM       = 200;
-int   muestreoSegS   = 1;
-bool  sistemaActivo  = true;
-char  sistemaID[32]  = "SENSOR-01";
+int  umbralMM      = 200;
+int  muestreoSegS  = 1;
+bool sistemaActivo = true;
+char sistemaID[32] = "SENSOR-01";
 
 // ---------------------------------------------------------------
 // WiFi / MQTT
 // ---------------------------------------------------------------
-const char* WIFI_SSID    = "Wokwi-GUEST";
-const char* WIFI_PASS    = "";
-const char* MQTT_BROKER  = "test.mosquitto.org";
-const int   MQTT_PORT    = 1883;
-const char* MQTT_CLIENT  = "esp32-tof-caece-v2";
+const char* WIFI_SSID   = "Wokwi-GUEST";
+const char* WIFI_PASS   = "";
+const char* MQTT_BROKER = "test.mosquitto.org";
+const int   MQTT_PORT   = 1883;
+const char* MQTT_CLIENT = "esp32-tof-caece-v2";
 
 const char* TOPIC_DIST   = "caece/tof/distancia";
 const char* TOPIC_EVENTO = "caece/tof/evento";
 const char* TOPIC_CONFIG = "caece/tof/config";
 const char* TOPIC_CMD    = "caece/tof/cmd";
+const char* TOPIC_BUZZER = "caece/tof/buzzer";
 
 WiFiClient   espClient;
 PubSubClient mqttClient(espClient);
@@ -55,9 +56,10 @@ PubSubClient mqttClient(espClient);
 // ---------------------------------------------------------------
 // Estado interno
 // ---------------------------------------------------------------
-bool alarmaActiva         = false;
-unsigned long ultimaLect  = 0;
-unsigned long ultimaPub   = 0;
+bool alarmaActiva          = false;
+bool buzzerSilenciadoManual = false;
+char buzzerModo[8]         = "auto"; // "auto" | "manual" | "off"
+unsigned long ultimaLect   = 0;
 
 // ================================================================
 // SETUP
@@ -71,7 +73,7 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
-  digitalWrite(BUZZER_PIN, LOW);
+  noTone(BUZZER_PIN);
 
   conectarWiFi();
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
@@ -86,24 +88,20 @@ void loop() {
   if (!mqttClient.connected())        conectarMQTT();
   mqttClient.loop();
 
-  // Solo medir si el sistema está activo
   if (!sistemaActivo) {
     digitalWrite(LED_PIN, LOW);
-    digitalWrite(BUZZER_PIN, LOW);
+    noTone(BUZZER_PIN);
     delay(500);
     return;
   }
 
-  unsigned long ahora = millis();
-  long intervaloMs    = (long)muestreoSegS * 1000;
+  unsigned long ahora   = millis();
+  long intervaloMs      = (long)muestreoSegS * 1000;
 
   if (ahora - ultimaLect >= intervaloMs) {
     ultimaLect = ahora;
-
     long dist = leerDistanciaMM();
-    if (dist > 0) {
-      procesarDistancia(dist);
-    }
+    if (dist > 0) procesarDistancia(dist);
   }
 }
 
@@ -132,14 +130,39 @@ void procesarDistancia(long distMM) {
 
   bool dentroUmbral = (distMM <= umbralMM);
 
-  // ---- Acciones locales ----
-  digitalWrite(LED_PIN,    dentroUmbral ? HIGH : LOW);
-  digitalWrite(BUZZER_PIN, dentroUmbral ? HIGH : LOW);
+  // LED siempre refleja la alarma
+  digitalWrite(LED_PIN, dentroUmbral ? HIGH : LOW);
 
-  // ---- Telemetría periódica ----
+  // Lógica del buzzer según modo
+  if (strcmp(buzzerModo, "off") == 0) {
+    // Siempre silenciado
+    noTone(BUZZER_PIN);
+
+  } else if (strcmp(buzzerModo, "auto") == 0) {
+    // Suena mientras haya alerta, se apaga solo al salir del umbral
+    if (dentroUmbral) {
+      tone(BUZZER_PIN, 1000);
+    } else {
+      noTone(BUZZER_PIN);
+      buzzerSilenciadoManual = false;
+    }
+
+  } else if (strcmp(buzzerModo, "manual") == 0) {
+    // Suena al entrar en alerta, solo se apaga con comando SILENCIAR
+    if (dentroUmbral && !buzzerSilenciadoManual) {
+      tone(BUZZER_PIN, 1000);
+    } else if (!dentroUmbral) {
+      // Al salir del umbral se resetea el silencio manual
+      // para que suene de nuevo en la próxima alerta
+      buzzerSilenciadoManual = false;
+      noTone(BUZZER_PIN);
+    }
+  }
+
+  // Telemetría
   publicarDistancia(distMM);
 
-  // ---- Eventos (solo en transición de estado) ----
+  // Eventos (solo en transición de estado)
   if (dentroUmbral && !alarmaActiva) {
     alarmaActiva = true;
     publicarEvento("ALERTA", distMM);
@@ -150,7 +173,7 @@ void procesarDistancia(long distMM) {
 }
 
 // ================================================================
-// Callback MQTT: recibe config y comandos desde el backend
+// Callback MQTT
 // ================================================================
 void onMQTTMessage(char* topic, byte* payload, unsigned int length) {
   String topicStr(topic);
@@ -162,12 +185,38 @@ void onMQTTMessage(char* topic, byte* payload, unsigned int length) {
   Serial.print(" -> ");
   Serial.println(buf);
 
+  // ---- Buzzer: comandos de texto plano ----
+  if (topicStr == TOPIC_BUZZER) {
+    String cmd = String(buf);
+    cmd.trim();
+
+    if (cmd == "off") {
+      strlcpy(buzzerModo, "off", sizeof(buzzerModo));
+      noTone(BUZZER_PIN);
+    } else if (cmd == "auto") {
+      strlcpy(buzzerModo, "auto", sizeof(buzzerModo));
+      buzzerSilenciadoManual = false;
+    } else if (cmd == "manual") {
+      strlcpy(buzzerModo, "manual", sizeof(buzzerModo));
+      buzzerSilenciadoManual = false;
+    } else if (cmd == "SILENCIAR") {
+      // Silencio puntual dentro del modo manual
+      buzzerSilenciadoManual = true;
+      noTone(BUZZER_PIN);
+    }
+
+    Serial.printf("[BUZZER] Modo: %s | Silenciado: %s\n",
+                  buzzerModo, buzzerSilenciadoManual ? "si" : "no");
+    return;
+  }
+
+  // ---- Config y CMD: JSON ----
   StaticJsonDocument<256> doc;
   if (deserializeJson(doc, buf) != DeserializationError::Ok) return;
 
   if (topicStr == TOPIC_CONFIG) {
-    if (doc.containsKey("umbral_mm"))         umbralMM      = doc["umbral_mm"];
-    if (doc.containsKey("tiempo_muestreo_s")) muestreoSegS  = doc["tiempo_muestreo_s"];
+    if (doc.containsKey("umbral_mm"))         umbralMM     = doc["umbral_mm"];
+    if (doc.containsKey("tiempo_muestreo_s")) muestreoSegS = doc["tiempo_muestreo_s"];
     if (doc.containsKey("sistema_id")) {
       strlcpy(sistemaID, doc["sistema_id"] | "SENSOR-01", sizeof(sistemaID));
     }
@@ -207,6 +256,7 @@ void conectarMQTT() {
     Serial.println(" OK");
     mqttClient.subscribe(TOPIC_CONFIG);
     mqttClient.subscribe(TOPIC_CMD);
+    mqttClient.subscribe(TOPIC_BUZZER);
   } else {
     Serial.printf(" FALLO rc=%d\n", mqttClient.state());
   }
@@ -229,27 +279,3 @@ void publicarEvento(const char* tipo, long distMM) {
   mqttClient.publish(TOPIC_EVENTO, buf);
   Serial.printf("[MQTT OUT] evento: %s\n", buf);
 }
-
-/*
-  ====================================================================
-  PORTABILIDAD A VL53L0X REAL
-  ====================================================================
-  1) Agregar librerías:
-       #include <Wire.h>
-       #include <Adafruit_VL53L0X.h>
-
-  2) Declarar objeto:
-       Adafruit_VL53L0X sensorTof;
-
-  3) En setup(), reemplazar config de TRIG/ECHO por:
-       Wire.begin();
-       sensorTof.begin();
-
-  4) Reemplazar cuerpo de leerDistanciaMM():
-       VL53L0X_RangingMeasurementData_t medida;
-       sensorTof.rangingTest(&medida, false);
-       return (medida.RangeStatus != 4) ? medida.RangeMilliMeter : -1;
-
-  Todo lo demás (loop, MQTT, config remota) permanece igual.
-  ====================================================================
-*/
